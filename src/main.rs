@@ -1,8 +1,10 @@
+use std::time::Duration;
+
 use iced::{
     alignment::Vertical,
     color,
     widget::{button, column, container, pick_list, radio, row, svg, text, text_input},
-    Element, Length, Theme,
+    Element, Length, Subscription, Theme,
 };
 
 struct Microwave {
@@ -40,11 +42,16 @@ fn main() -> iced::Result {
     iced::application("Test", update, view)
         .window_size((450.0, 600.0))
         .theme(theme)
+        .subscription(subscription)
         .run()
 }
 
 fn theme(_microwave: &Microwave) -> Theme {
     Theme::Light
+}
+
+fn subscription(_microwave: &Microwave) -> Subscription<Message> {
+    iced::time::every(Duration::from_secs(1)).map(|_| Message::MuteToggle)
 }
 
 fn update(microwave: &mut Microwave, message: Message) {
