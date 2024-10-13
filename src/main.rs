@@ -1,28 +1,23 @@
-use std::time::Duration;
+mod microphone;
+mod ovr;
 
 use iced::{
     alignment::Vertical,
     color,
     widget::{button, column, container, pick_list, radio, row, svg, text, text_input},
-    Element, Length, Subscription, Theme,
+    Element, Length, Subscription, Task, Theme,
 };
+use microphone::Microphone;
+use ovr::Ovr;
+use std::fmt::Write;
+use std::time::Duration;
+use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
 
 struct Microwave {
-    headset: &'static str,
-    muted: bool,
+    ovr: Ovr,
+    mics: Vec<String>,
+    mic: Option<Microphone>,
     mode: MicMode,
-    mic: &'static str,
-}
-
-impl Default for Microwave {
-    fn default() -> Self {
-        Self {
-            headset: "Quest 3",
-            muted: false,
-            mode: MicMode::MuteAndUnmute,
-            mic: "Oculus Virtual Audio Device",
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,38 +29,77 @@ enum MicMode {
 #[derive(Debug, Clone)]
 enum Message {
     MicMode(MicMode),
-    MicSelected(&'static str),
+    MicSelected(String),
     MuteToggle,
 }
 
 fn main() -> iced::Result {
+    unsafe {
+        CoInitializeEx(None, COINIT_APARTMENTTHREADED).unwrap();
+    }
+
+    let ovr = unsafe { Ovr::new().expect("failed connecting to headset") };
+    let session = ovr.session;
+
+    let mics = unsafe { microphone::active().expect("error getting microphones") };
+
     iced::application("Test", update, view)
         .window_size((450.0, 600.0))
         .theme(theme)
         .subscription(subscription)
-        .run()
+        .run_with(move || {
+            (
+                Microwave {
+                    ovr,
+                    mic: mics
+                        .iter()
+                        .find(|mic| mic.name.contains("Headset Microphone"))
+                        .cloned(),
+                    mics: mics.into_iter().map(|mic| mic.name).collect(),
+                    mode: MicMode::MuteAndUnmute,
+                },
+                Task::none(),
+            )
+        })?;
+
+    unsafe {
+        Ovr::shutdown(session);
+        CoUninitialize();
+    }
+
+    Ok(())
 }
 
 fn theme(_microwave: &Microwave) -> Theme {
     Theme::Light
 }
 
-fn subscription(_microwave: &Microwave) -> Subscription<Message> {
-    iced::time::every(Duration::from_secs(1)).map(|_| Message::MuteToggle)
+fn subscription(microwave: &Microwave) -> Subscription<Message> {
+    let interval = Duration::from_secs_f32(1000.0 / microwave.ovr.desc.DisplayRefreshRate / 1000.0);
+
+    iced::time::every(interval).map(|_| Message::MuteToggle)
 }
 
 fn update(microwave: &mut Microwave, message: Message) {
     match message {
         Message::MicMode(choice) => microwave.mode = choice,
-        Message::MicSelected(choice) => microwave.mic = choice,
-        Message::MuteToggle => microwave.muted = !microwave.muted,
+        Message::MicSelected(choice) => {
+            let mics = unsafe { microphone::active().expect("error getting microphones") };
+
+            microwave.mic = mics.iter().find(|mic| mic.name == choice).cloned();
+        }
+        Message::MuteToggle => {
+            if let Some(mic) = &mut microwave.mic {
+                let _ = unsafe { mic.set_mute(!mic.muted) };
+            }
+        }
     }
 }
 
 fn view(microwave: &Microwave) -> Element<Message> {
     let header = row![
         text("Microwave").width(Length::Fill).size(24),
-        text!("Connected to {}", microwave.headset)
+        text!("Connected to {}", microwave.ovr.headset)
             .size(16)
             .color(color!(0x34C759))
     ]
@@ -87,25 +121,28 @@ fn view(microwave: &Microwave) -> Element<Message> {
     ]
     .spacing(8);
 
-    let mic_toggle = if let MicMode::MuteAndUnmute = microwave.mode {
-        Some(
-            button(
-                row![
-                    text(if microwave.muted { "Unmute" } else { "Mute" }).width(Length::Fill),
-                    svg(if microwave.muted {
-                        "res/muted.svg"
-                    } else {
-                        "res/unmuted.svg"
-                    })
-                    .width(40),
-                ]
-                .align_y(Vertical::Center),
-            )
-            .width(Length::Fill)
-            .padding(16)
-            .style(button::secondary)
-            .on_press(Message::MuteToggle),
+    let mic_toggle = if let Some(mic) = &microwave.mic {
+        let button = button(
+            row![
+                text(if mic.muted { "Unmute" } else { "Mute" }).width(Length::Fill),
+                svg(if mic.muted {
+                    "res/muted.svg"
+                } else {
+                    "res/unmuted.svg"
+                })
+                .width(40),
+            ]
+            .align_y(Vertical::Center),
         )
+        .width(Length::Fill)
+        .padding(16)
+        .style(button::secondary);
+
+        if microwave.mode == MicMode::MuteAndUnmute {
+            Some(button.on_press(Message::MuteToggle))
+        } else {
+            Some(button)
+        }
     } else {
         None
     };
@@ -119,8 +156,8 @@ fn view(microwave: &Microwave) -> Element<Message> {
     let mics = column![
         text("Microphone"),
         pick_list(
-            ["Oculus Virtual Audio Device", "Laptop Microphone"],
-            Some(microwave.mic),
+            microwave.mics.as_slice(),
+            microwave.mic.as_ref().map(|mic| &mic.name),
             Message::MicSelected,
         )
         .width(Length::Fill)
