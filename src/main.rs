@@ -4,19 +4,18 @@ mod ovr;
 use iced::{
     alignment::Vertical,
     color,
-    widget::{button, column, container, pick_list, radio, row, svg, text, text_input},
+    widget::{button, column, container, pick_list, radio, row, svg, text},
     Element, Length, Subscription, Task, Theme,
 };
 use microphone::Microphone;
 use ovr::Ovr;
-use std::fmt::Write;
 use std::time::Duration;
 use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
 
 struct Microwave {
     ovr: Ovr,
-    mics: Vec<String>,
     mic: Option<Microphone>,
+    mics: Vec<String>,
     mode: MicMode,
 }
 
@@ -28,9 +27,11 @@ enum MicMode {
 
 #[derive(Debug, Clone)]
 enum Message {
+    PollControllers,
+    MuteToggle,
     MicMode(MicMode),
     MicSelected(String),
-    MuteToggle,
+    SettingControllerBind,
 }
 
 fn main() -> iced::Result {
@@ -43,10 +44,10 @@ fn main() -> iced::Result {
 
     let mics = unsafe { microphone::active().expect("error getting microphones") };
 
-    iced::application("Test", update, view)
+    iced::application("Test", Microwave::update, Microwave::view)
         .window_size((450.0, 600.0))
-        .theme(theme)
-        .subscription(subscription)
+        .theme(Microwave::theme)
+        .subscription(Microwave::subscription)
         .run_with(move || {
             (
                 Microwave {
@@ -70,110 +71,130 @@ fn main() -> iced::Result {
     Ok(())
 }
 
-fn theme(_microwave: &Microwave) -> Theme {
-    Theme::Light
-}
+impl Microwave {
+    fn theme(&self) -> Theme {
+        Theme::Light
+    }
 
-fn subscription(microwave: &Microwave) -> Subscription<Message> {
-    let interval = Duration::from_secs_f32(1000.0 / microwave.ovr.desc.DisplayRefreshRate / 1000.0);
+    fn subscription(&self) -> Subscription<Message> {
+        let interval = Duration::from_secs_f32(1000.0 / self.ovr.desc.DisplayRefreshRate / 1000.0);
 
-    iced::time::every(interval).map(|_| Message::MuteToggle)
-}
+        iced::time::every(interval).map(|_| Message::PollControllers)
+    }
 
-fn update(microwave: &mut Microwave, message: Message) {
-    match message {
-        Message::MicMode(choice) => microwave.mode = choice,
-        Message::MicSelected(choice) => {
-            let mics = unsafe { microphone::active().expect("error getting microphones") };
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::PollControllers => unsafe {
+                if let Ok(pressed) = self.ovr.poll_input() {
+                    if pressed {
+                        self.update(Message::MuteToggle);
+                    }
+                }
+            },
+            Message::MuteToggle => {
+                if let Some(mic) = &mut self.mic {
+                    let _ = unsafe { mic.set_mute(!mic.muted) };
+                }
+            }
+            Message::MicMode(choice) => self.mode = choice,
+            Message::MicSelected(choice) => {
+                let mics = unsafe { microphone::active().expect("error getting microphones") };
 
-            microwave.mic = mics.iter().find(|mic| mic.name == choice).cloned();
-        }
-        Message::MuteToggle => {
-            if let Some(mic) = &mut microwave.mic {
-                let _ = unsafe { mic.set_mute(!mic.muted) };
+                self.mic = mics.iter().find(|mic| mic.name == choice).cloned();
+            }
+            Message::SettingControllerBind => {
+                self.ovr.start_setting_bind();
             }
         }
     }
-}
 
-fn view(microwave: &Microwave) -> Element<Message> {
-    let header = row![
-        text("Microwave").width(Length::Fill).size(24),
-        text!("Connected to {}", microwave.ovr.headset)
-            .size(16)
-            .color(color!(0x34C759))
-    ]
-    .align_y(Vertical::Center);
+    fn view(&self) -> Element<Message> {
+        let header = row![
+            text("Microwave").width(Length::Fill).size(24),
+            text!("Connected to {}", self.ovr.headset)
+                .size(18)
+                .color(color!(0x3FC661))
+        ]
+        .align_y(Vertical::Center);
 
-    let mic_mode = column![
-        radio(
-            "Mute / Unmute",
-            MicMode::MuteAndUnmute,
-            Some(microwave.mode),
-            Message::MicMode,
-        ),
-        radio(
-            "Push To Talk",
-            MicMode::PushToTalk,
-            Some(microwave.mode),
-            Message::MicMode,
-        )
-    ]
-    .spacing(8);
+        let mic_mode = column![
+            radio(
+                "Mute / Unmute",
+                MicMode::MuteAndUnmute,
+                Some(self.mode),
+                Message::MicMode,
+            ),
+            radio(
+                "Push To Talk",
+                MicMode::PushToTalk,
+                Some(self.mode),
+                Message::MicMode,
+            )
+        ]
+        .spacing(8);
 
-    let mic_toggle = if let Some(mic) = &microwave.mic {
-        let button = button(
-            row![
-                text(if mic.muted { "Unmute" } else { "Mute" }).width(Length::Fill),
-                svg(if mic.muted {
-                    "res/muted.svg"
-                } else {
-                    "res/unmuted.svg"
-                })
-                .width(40),
-            ]
-            .align_y(Vertical::Center),
-        )
-        .width(Length::Fill)
-        .padding(16)
-        .style(button::secondary);
+        let mic_toggle = if let Some(mic) = &self.mic {
+            let button = button(
+                row![
+                    text(if mic.muted { "Unmute" } else { "Mute" }).width(Length::Fill),
+                    svg(if mic.muted {
+                        "res/muted.svg"
+                    } else {
+                        "res/unmuted.svg"
+                    })
+                    .width(40),
+                ]
+                .align_y(Vertical::Center),
+            )
+            .width(Length::Fill)
+            .padding(16)
+            .style(button::secondary)
+            .on_press_maybe((self.mode == MicMode::MuteAndUnmute).then(|| Message::MuteToggle));
 
-        if microwave.mode == MicMode::MuteAndUnmute {
-            Some(button.on_press(Message::MuteToggle))
-        } else {
             Some(button)
-        }
-    } else {
-        None
-    };
+        } else {
+            None
+        };
 
-    let controller_binding = column![
-        text("Controller Binding"),
-        text_input("L Stick + R Stick", "").padding(16)
-    ]
-    .spacing(8);
+        let controller_binding = column![
+            text("Controller Binding"),
+            row![
+                container(text(self.ovr.bind_to_string()))
+                    .style(|theme| container::bordered_box(theme))
+                    .width(Length::Fill)
+                    .padding(16),
+                button("Set Bind")
+                    .on_press_maybe(
+                        (!self.ovr.setting_bind).then(|| Message::SettingControllerBind)
+                    )
+                    .padding(16)
+            ]
+            .spacing(8)
+        ]
+        .spacing(8);
 
-    let mics = column![
-        text("Microphone"),
-        pick_list(
-            microwave.mics.as_slice(),
-            microwave.mic.as_ref().map(|mic| &mic.name),
-            Message::MicSelected,
-        )
-        .width(Length::Fill)
-        .padding(16)
-    ]
-    .spacing(8);
+        let mics = column![
+            text("Microphone"),
+            pick_list(
+                self.mics.as_slice(),
+                self.mic.as_ref().map(|mic| &mic.name),
+                Message::MicSelected,
+            )
+            .width(Length::Fill)
+            .padding(16)
+        ]
+        .spacing(8);
 
-    let column = column![header, mic_mode]
-        .push_maybe(mic_toggle)
-        .push(controller_binding)
-        .push(mics)
-        .spacing(20);
+        let column = column![header, mic_mode]
+            .push_maybe(mic_toggle)
+            .push(controller_binding)
+            .push(mics)
+            .spacing(20);
 
-    container(column)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .padding([36, 16])
-        .into()
+        container(column)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .padding([36, 16])
+            .into()
+    }
 }

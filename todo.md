@@ -1,0 +1,3 @@
+- better error handling
+- refresh active mics
+- speaker volume stepping binds

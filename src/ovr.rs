@@ -7,8 +7,6 @@ mod bindings {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 }
 
-use std::fmt::Display;
-
 use bindings::{
     ovrButton__ovrButton_A, ovrButton__ovrButton_B, ovrButton__ovrButton_Enter,
     ovrButton__ovrButton_LThumb, ovrButton__ovrButton_RThumb, ovrButton__ovrButton_X,
@@ -17,6 +15,8 @@ use bindings::{
     ovrResult, ovrSession, ovr_Create, ovr_Destroy, ovr_GetHmdDesc, ovr_GetInputState,
     ovr_GetLastErrorInfo, ovr_Initialize, ovr_Shutdown,
 };
+use std::fmt::Display;
+use std::fmt::Write;
 
 pub type OvrResult<T = ()> = Result<T, Box<ovrErrorInfo>>;
 
@@ -26,6 +26,8 @@ pub struct Ovr {
     pub binding: Vec<ControllerButtons>,
     pub held: Vec<ControllerButtons>,
     pub session: ovrSession,
+    pub setting_bind: bool,
+    pressed: bool,
 }
 
 impl Ovr {
@@ -47,19 +49,30 @@ impl Ovr {
         ovr_Create(&mut session, &mut luid).check()?;
 
         let desc = ovr_GetHmdDesc(session);
-        let headset = String::from_utf8(desc.ProductName.iter().map(|&c| c as u8).collect())
-            .unwrap_or("Unknown".to_string());
+
+        let headset = String::from_utf8(
+            desc.ProductName
+                .iter()
+                .map(|&c| c as u8)
+                .filter(|&c| c != 0)
+                .collect(),
+        )
+        .unwrap_or("Unknown".to_string());
 
         Ok(Self {
             desc,
             headset,
-            binding: vec![],
+            binding: vec![ControllerButtons::LThumb, ControllerButtons::RThumb],
             held: vec![],
             session,
+            pressed: false,
+            setting_bind: false,
         })
     }
 
-    pub unsafe fn poll_input(&mut self) -> OvrResult {
+    pub unsafe fn poll_input(&mut self) -> OvrResult<bool> {
+        self.held.clear();
+
         let mut state: ovrInputState = std::mem::zeroed();
 
         ovr_GetInputState(
@@ -75,7 +88,68 @@ impl Ovr {
             }
         }
 
-        Ok(())
+        if self.setting_bind {
+            for button in &self.held {
+                if !self.binding.contains(button) {
+                    self.binding.push(*button)
+                }
+            }
+
+            if !self.binding.is_empty()
+                && self
+                    .binding
+                    .iter()
+                    .all(|button| !self.held.contains(button))
+            {
+                self.setting_bind = false;
+            }
+
+            return Ok(false);
+        }
+
+        if self.held.is_empty() {
+            self.pressed = false;
+
+            return Ok(false);
+        }
+
+        if self.pressed {
+            if self
+                .binding
+                .iter()
+                .all(|button| !self.held.contains(button))
+            {
+                self.pressed = false;
+            }
+
+            Ok(false)
+        } else if self.binding.iter().all(|item| self.held.contains(item)) {
+            self.pressed = true;
+
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    pub fn start_setting_bind(&mut self) {
+        self.binding.clear();
+
+        self.setting_bind = true;
+    }
+
+    pub fn bind_to_string(&self) -> String {
+        let mut output = String::new();
+
+        for (i, button) in self.binding.iter().enumerate() {
+            if i == 0 {
+                let _ = write!(output, "{}", button);
+            } else {
+                let _ = write!(output, " + {}", button);
+            };
+        }
+
+        output
     }
 
     pub unsafe fn shutdown(session: ovrSession) {
