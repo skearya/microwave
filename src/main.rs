@@ -1,5 +1,6 @@
 mod microphone;
 mod ovr;
+mod subscription;
 
 use iced::{
     alignment::Vertical,
@@ -7,10 +8,11 @@ use iced::{
     widget::{button, column, container, pick_list, radio, row, svg, text},
     Element, Length, Subscription, Task, Theme,
 };
-use microphone::Microphone;
-use ovr::Ovr;
 use std::time::Duration;
 use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
+
+use microphone::Microphone;
+use ovr::Ovr;
 
 struct Microwave {
     ovr: Ovr,
@@ -77,7 +79,7 @@ impl Microwave {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        let interval = Duration::from_secs_f32(1000.0 / self.ovr.desc.DisplayRefreshRate / 1000.0);
+        let interval = Duration::from_secs_f32(1000.0 / self.ovr.refresh_rate / 1000.0);
 
         iced::time::every(interval).map(|_| Message::PollControllers)
     }
@@ -85,9 +87,10 @@ impl Microwave {
     fn update(&mut self, message: Message) {
         match message {
             Message::PollControllers => unsafe {
-                if let Ok(pressed) = self.ovr.poll_input() {
-                    if pressed {
-                        self.update(Message::MuteToggle);
+                if let Ok(Some(event)) = self.ovr.poll_input() {
+                    match event {
+                        ovr::ControllerEvent::Pressed => self.update(Message::MuteToggle),
+                        ovr::ControllerEvent::Released => {}
                     }
                 }
             },
@@ -103,7 +106,7 @@ impl Microwave {
                 self.mic = mics.iter().find(|mic| mic.name == choice).cloned();
             }
             Message::SettingControllerBind => {
-                self.ovr.start_setting_bind();
+                self.ovr.start_setting_binding();
             }
         }
     }
@@ -149,7 +152,7 @@ impl Microwave {
             .width(Length::Fill)
             .padding(16)
             .style(button::secondary)
-            .on_press_maybe((self.mode == MicMode::MuteAndUnmute).then(|| Message::MuteToggle));
+            .on_press_maybe((self.mode == MicMode::MuteAndUnmute).then_some(Message::MuteToggle));
 
             Some(button)
         } else {
@@ -159,13 +162,13 @@ impl Microwave {
         let controller_binding = column![
             text("Controller Binding"),
             row![
-                container(text(self.ovr.bind_to_string()))
-                    .style(|theme| container::bordered_box(theme))
+                container(text(self.ovr.binding_to_string()))
+                    .style(container::bordered_box)
                     .width(Length::Fill)
                     .padding(16),
                 button("Set Bind")
                     .on_press_maybe(
-                        (!self.ovr.setting_bind).then(|| Message::SettingControllerBind)
+                        (!self.ovr.setting_binding).then_some(Message::SettingControllerBind)
                     )
                     .padding(16)
             ]

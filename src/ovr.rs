@@ -11,23 +11,34 @@ use bindings::{
     ovrButton__ovrButton_A, ovrButton__ovrButton_B, ovrButton__ovrButton_Enter,
     ovrButton__ovrButton_LThumb, ovrButton__ovrButton_RThumb, ovrButton__ovrButton_X,
     ovrButton__ovrButton_Y, ovrControllerType__ovrControllerType_Touch, ovrErrorInfo,
-    ovrGraphicsLuid, ovrHmdDesc, ovrInitFlags__ovrInit_Invisible, ovrInitParams, ovrInputState,
-    ovrResult, ovrSession, ovr_Create, ovr_Destroy, ovr_GetHmdDesc, ovr_GetInputState,
-    ovr_GetLastErrorInfo, ovr_Initialize, ovr_Shutdown,
+    ovrGraphicsLuid, ovrInitFlags__ovrInit_Invisible, ovrInitParams, ovrInputState, ovrResult,
+    ovrSession, ovr_Create, ovr_Destroy, ovr_GetHmdDesc, ovr_GetInputState, ovr_GetLastErrorInfo,
+    ovr_Initialize, ovr_Shutdown,
 };
-use std::fmt::Display;
-use std::fmt::Write;
 
-pub type OvrResult<T = ()> = Result<T, Box<ovrErrorInfo>>;
+#[derive(Debug)]
+pub struct OvrError {
+    pub code: i32,
+    pub reason: String,
+}
 
+pub type OvrResult<T = ()> = Result<T, OvrError>;
+
+#[derive(Debug)]
 pub struct Ovr {
-    pub headset: String,
-    pub desc: ovrHmdDesc,
-    pub binding: Vec<ControllerButtons>,
-    pub held: Vec<ControllerButtons>,
     pub session: ovrSession,
-    pub setting_bind: bool,
+    pub headset: String,
+    pub refresh_rate: f32,
+    pub binding: u32,
+    pub setting_binding: bool,
     pressed: bool,
+}
+
+#[derive(Debug)]
+pub enum ControllerEvent {
+    Pressed,
+    Released,
+    BindingSet(u32),
 }
 
 impl Ovr {
@@ -45,36 +56,22 @@ impl Ovr {
 
         let mut session: ovrSession = std::mem::zeroed();
         let mut luid: ovrGraphicsLuid = std::mem::zeroed();
-
         ovr_Create(&mut session, &mut luid).check()?;
 
         let desc = ovr_GetHmdDesc(session);
 
-        let headset = String::from_utf8(
-            desc.ProductName
-                .iter()
-                .map(|&c| c as u8)
-                .filter(|&c| c != 0)
-                .collect(),
-        )
-        .unwrap_or("Unknown".to_string());
-
         Ok(Self {
-            desc,
-            headset,
-            binding: vec![ControllerButtons::LThumb, ControllerButtons::RThumb],
-            held: vec![],
             session,
+            headset: char_array_to_string(&desc.ProductName),
+            refresh_rate: desc.DisplayRefreshRate,
+            binding: ovrButton__ovrButton_LThumb as u32 | ovrButton__ovrButton_RThumb as u32,
+            setting_binding: false,
             pressed: false,
-            setting_bind: false,
         })
     }
 
-    pub unsafe fn poll_input(&mut self) -> OvrResult<bool> {
-        self.held.clear();
-
+    pub unsafe fn poll_input(&mut self) -> OvrResult<Option<ControllerEvent>> {
         let mut state: ovrInputState = std::mem::zeroed();
-
         ovr_GetInputState(
             self.session,
             ovrControllerType__ovrControllerType_Touch,
@@ -82,71 +79,55 @@ impl Ovr {
         )
         .check()?;
 
-        for (ovr_button, button) in MAPPINGS {
-            if state.Buttons & ovr_button != 0 {
-                self.held.push(*button);
+        if self.setting_binding {
+            self.binding = self.binding | state.Buttons;
+
+            // At least one button binded and they are no longer holding down the button(s)
+            if self.binding != 0 && self.binding & state.Buttons == 0 {
+                self.setting_binding = false;
+
+                return Ok(Some(ControllerEvent::BindingSet(self.binding)));
             }
+
+            return Ok(None);
         }
 
-        if self.setting_bind {
-            for button in &self.held {
-                if !self.binding.contains(button) {
-                    self.binding.push(*button)
-                }
+        let event = if state.Buttons & self.binding == self.binding {
+            if !self.pressed {
+                self.pressed = true;
+
+                Some(ControllerEvent::Pressed)
+            } else {
+                None
             }
-
-            if !self.binding.is_empty()
-                && self
-                    .binding
-                    .iter()
-                    .all(|button| !self.held.contains(button))
-            {
-                self.setting_bind = false;
-            }
-
-            return Ok(false);
-        }
-
-        if self.held.is_empty() {
+        } else if self.pressed {
             self.pressed = false;
 
-            return Ok(false);
-        }
-
-        if self.pressed {
-            if self
-                .binding
-                .iter()
-                .all(|button| !self.held.contains(button))
-            {
-                self.pressed = false;
-            }
-
-            Ok(false)
-        } else if self.binding.iter().all(|item| self.held.contains(item)) {
-            self.pressed = true;
-
-            Ok(true)
+            Some(ControllerEvent::Released)
         } else {
-            Ok(false)
-        }
+            None
+        };
+
+        Ok(event)
     }
 
-    pub fn start_setting_bind(&mut self) {
-        self.binding.clear();
-
-        self.setting_bind = true;
+    pub fn start_setting_binding(&mut self) {
+        self.binding = 0;
+        self.setting_binding = true;
     }
 
-    pub fn bind_to_string(&self) -> String {
+    pub fn binding_to_string(&self) -> String {
         let mut output = String::new();
 
-        for (i, button) in self.binding.iter().enumerate() {
-            if i == 0 {
-                let _ = write!(output, "{}", button);
-            } else {
-                let _ = write!(output, " + {}", button);
-            };
+        for (button, string) in MAPPINGS {
+            if self.binding & button != 0 {
+                if output.is_empty() {
+                    output.push_str(string);
+                } else {
+                    output.push_str(" + ");
+                    output.push_str(string);
+                }
+            }
         }
 
         output
@@ -158,40 +139,14 @@ impl Ovr {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ControllerButtons {
-    A,
-    B,
-    X,
-    Y,
-    LThumb,
-    RThumb,
-    Menu,
-}
-
-impl Display for ControllerButtons {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ControllerButtons::A => write!(f, "A"),
-            ControllerButtons::B => write!(f, "B"),
-            ControllerButtons::X => write!(f, "X"),
-            ControllerButtons::Y => write!(f, "Y"),
-            ControllerButtons::LThumb => write!(f, "L Thumb"),
-            ControllerButtons::RThumb => write!(f, "R Thumb"),
-            ControllerButtons::Menu => write!(f, "Menu"),
-        }
-    }
-}
-
-#[rustfmt::skip]
-const MAPPINGS: &[(u32, ControllerButtons)] = &[
-    (ovrButton__ovrButton_A as u32, ControllerButtons::A),
-    (ovrButton__ovrButton_B as u32, ControllerButtons::B),
-    (ovrButton__ovrButton_X as u32, ControllerButtons::X),
-    (ovrButton__ovrButton_Y as u32, ControllerButtons::Y),
-    (ovrButton__ovrButton_LThumb as u32, ControllerButtons::LThumb),
-    (ovrButton__ovrButton_RThumb as u32, ControllerButtons::RThumb),
-    (ovrButton__ovrButton_Enter as u32, ControllerButtons::Menu),
+const MAPPINGS: &[(u32, &str)] = &[
+    (ovrButton__ovrButton_A as u32, "A"),
+    (ovrButton__ovrButton_B as u32, "B"),
+    (ovrButton__ovrButton_X as u32, "X"),
+    (ovrButton__ovrButton_Y as u32, "Y"),
+    (ovrButton__ovrButton_LThumb as u32, "L Thumb"),
+    (ovrButton__ovrButton_RThumb as u32, "R Thumb"),
+    (ovrButton__ovrButton_Enter as u32, "Menu"),
 ];
 
 trait OvrResultCheck {
@@ -201,12 +156,20 @@ trait OvrResultCheck {
 impl OvrResultCheck for ovrResult {
     unsafe fn check(self) -> OvrResult {
         if self < 0 {
-            let mut info: Box<ovrErrorInfo> = Box::new(std::mem::zeroed());
-            ovr_GetLastErrorInfo(&mut *info);
+            let mut info: ovrErrorInfo = std::mem::zeroed();
+            ovr_GetLastErrorInfo(&mut info);
 
-            Err(info)
+            Err(OvrError {
+                code: info.Result,
+                reason: char_array_to_string(&info.ErrorString),
+            })
         } else {
             Ok(())
         }
     }
+}
+
+fn char_array_to_string(input: &[i8]) -> String {
+    String::from_utf8(input.iter().map(|&c| c as u8).filter(|&c| c != 0).collect())
+        .unwrap_or("Unknown".to_string())
 }
