@@ -1,6 +1,6 @@
 mod microphone;
 mod ovr;
-mod runner;
+mod poller;
 
 use iced::{
     alignment::Vertical,
@@ -12,17 +12,18 @@ use iced::{
 use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
 
 use microphone::Microphone;
-use ovr::{ControllerEvent, Ovr, OVR_SESSION};
-use runner::Event;
+use ovr::{ControllerEvent, Ovr, OvrError, OVR_SESSION};
+use poller::Event;
 
 struct Microwave {
-    runner: Option<mpsc::Sender<runner::Message>>,
+    poller: Option<mpsc::Sender<poller::Message>>,
+    error: Option<String>,
     headset: String,
     mic: Option<Microphone>,
     mics: Vec<String>,
     mode: MicMode,
     binding: String,
-    setting_binding: bool,
+    is_setting_binding: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,7 +34,7 @@ enum MicMode {
 
 #[derive(Debug, Clone)]
 enum Message {
-    Runner(runner::Event),
+    Poller(poller::Event),
     MuteToggle,
     MicMode(MicMode),
     MicSelected(String),
@@ -47,14 +48,15 @@ fn main() -> iced::Result {
 
     let mics = unsafe { microphone::active().expect("error getting microphones") };
 
-    iced::application("Test", Microwave::update, Microwave::view)
+    iced::application("Microwave", Microwave::update, Microwave::view)
         .window_size((450.0, 600.0))
         .theme(Microwave::theme)
         .subscription(Microwave::subscription)
         .run_with(move || {
             (
                 Microwave {
-                    runner: None,
+                    poller: None,
+                    error: None,
                     headset: "Disconnected".to_string(),
                     mic: mics
                         .iter()
@@ -63,7 +65,7 @@ fn main() -> iced::Result {
                     mics: mics.into_iter().map(|mic| mic.name).collect(),
                     mode: MicMode::MuteAndUnmute,
                     binding: ovr::binding_to_string(1024 | 4),
-                    setting_binding: false,
+                    is_setting_binding: false,
                 },
                 Task::none(),
             )
@@ -86,15 +88,15 @@ impl Microwave {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        Subscription::run(runner::poll).map(Message::Runner)
+        Subscription::run(poller::poll).map(Message::Poller)
     }
 
     fn update(&mut self, message: Message) {
         match message {
-            Message::Runner(event) => match event {
+            Message::Poller(event) => match event {
                 Event::Ready(headset, sender) => {
                     self.headset = headset;
-                    self.runner = Some(sender)
+                    self.poller = Some(sender)
                 }
                 Event::Controller(event) => match (event, self.mode) {
                     (ControllerEvent::Pressed, MicMode::PushToTalk) => {
@@ -120,10 +122,12 @@ impl Microwave {
                     }
                     (ControllerEvent::BindingSet(binding), _) => {
                         self.binding = ovr::binding_to_string(binding);
-                        self.setting_binding = false;
+                        self.is_setting_binding = false;
                     }
                 },
-                Event::Error(_error) => {}
+                Event::Error(OvrError { code, reason }) => {
+                    self.error = Some(format!("OVR Error\nCode {code}\nReason {reason}"))
+                }
             },
             Message::MuteToggle => {
                 if let Some(mic) = &mut self.mic {
@@ -149,16 +153,30 @@ impl Microwave {
                 self.mic = mics.iter().find(|mic| mic.name == choice).cloned();
             }
             Message::SettingControllerBind => {
-                if let Some(runner) = &mut self.runner {
-                    let _ = runner.try_send(runner::Message::SettingBind);
-                }
+                if let Some(runner) = &mut self.poller {
+                    let _ = runner.try_send(poller::Message::SettingBind);
 
-                self.setting_binding = true;
+                    self.is_setting_binding = true;
+                }
             }
         }
     }
 
     fn view(&self) -> Element<Message> {
+        if let Some(error) = &self.error {
+            self.errored(error.clone())
+        } else if self.poller.is_some() {
+            self.normal()
+        } else {
+            self.loading()
+        }
+    }
+
+    fn loading(&self) -> Element<Message> {
+        container(text("Loading...")).center(Length::Fill).into()
+    }
+
+    fn normal(&self) -> Element<Message> {
         let header = row![
             text("Microwave").width(Length::Fill).size(24),
             text!("Connected to {}", self.headset)
@@ -215,7 +233,7 @@ impl Microwave {
                     .padding(16),
                 button("Set Bind")
                     .on_press_maybe(
-                        (!self.setting_binding).then_some(Message::SettingControllerBind)
+                        (!self.is_setting_binding).then_some(Message::SettingControllerBind)
                     )
                     .padding(16)
             ]
@@ -245,6 +263,13 @@ impl Microwave {
             .width(Length::Fill)
             .height(Length::Fill)
             .padding([36, 16])
+            .into()
+    }
+
+    fn errored(&self, error: String) -> Element<Message> {
+        container(text(error).style(text::danger))
+            .center(Length::Fill)
+            .padding(20)
             .into()
     }
 }

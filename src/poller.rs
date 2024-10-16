@@ -22,8 +22,16 @@ pub fn poll() -> impl Stream<Item = Event> {
     stream::channel(64, move |mut output| async move {
         let (sender, mut receiver) = mpsc::channel(64);
 
-        let mut ovr = unsafe { Ovr::new().expect("failed connecting to headset") };
-        unsafe { OVR_SESSION = ovr.session };
+        let mut ovr = match unsafe { Ovr::new() } {
+            Ok(ovr) => unsafe {
+                OVR_SESSION = ovr.session;
+                ovr
+            },
+            Err(error) => {
+                let _ = output.send(Event::Error(error)).await;
+                return;
+            }
+        };
 
         let interval = Duration::from_secs_f32(1000.0 / ovr.refresh_rate / 1000.0);
 
@@ -32,8 +40,9 @@ pub fn poll() -> impl Stream<Item = Event> {
         loop {
             tokio::select! {
                 message = receiver.next() => {
-                    if let Some(Message::SettingBind) = message {
-                        ovr.start_setting_binding();
+                    match message {
+                        Some(Message::SettingBind) => ovr.start_setting_binding(),
+                        None => {}
                     }
                 }
                 _ = tokio::time::sleep(interval) => {
