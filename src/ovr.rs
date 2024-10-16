@@ -87,13 +87,13 @@ impl Ovr {
         .check()?;
 
         if self.setting_binding {
-            let binding = self.binding | state.Buttons;
+            let prev_binding = self.binding;
+            self.binding = self.binding | state.Buttons;
 
-            // if binding != self.binding {
-            //     return Ok(Some(ControllerEvent::BindingUpdate(self.binding)));
-            // }
-
-            self.binding = binding;
+            // Higher button value means more buttons pressed
+            if prev_binding < self.binding {
+                return Ok(Some(ControllerEvent::BindingUpdate(self.binding)));
+            }
 
             // At least one button binded and they are no longer holding down the button(s)
             if self.binding != 0 && self.binding & state.Buttons == 0 {

@@ -5,16 +5,15 @@ mod runner;
 use iced::{
     alignment::Vertical,
     color,
-    futures::{channel::mpsc, SinkExt},
+    futures::channel::mpsc,
     widget::{button, column, container, pick_list, radio, row, svg, text},
     Element, Length, Subscription, Task, Theme,
 };
-use runner::Event;
-use std::time::Duration;
 use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
 
 use microphone::Microphone;
 use ovr::{ControllerEvent, Ovr, OVR_SESSION};
+use runner::Event;
 
 struct Microwave {
     runner: Option<mpsc::Sender<runner::Message>>,
@@ -117,7 +116,6 @@ impl Microwave {
                     }
                     (ControllerEvent::Released, MicMode::MuteAndUnmute) => {}
                     (ControllerEvent::BindingUpdate(binding), _) => {
-                        dbg!(binding);
                         self.binding = ovr::binding_to_string(binding)
                     }
                     (ControllerEvent::BindingSet(binding), _) => {

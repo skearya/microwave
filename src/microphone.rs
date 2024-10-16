@@ -55,27 +55,3 @@ pub unsafe fn active() -> windows::core::Result<Vec<Microphone>> {
 
     Ok(inputs)
 }
-
-// pub unsafe fn active_speakers() -> windows::core::Result<()> {
-//     let enumerator =
-//         CoCreateInstance::<_, IMMDeviceEnumerator>(&MMDeviceEnumerator, None, CLSCTX_ALL)?;
-//     let collection = enumerator.EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE)?;
-
-//     let device = collection.Item(0)?;
-
-//     println!(
-//         "{}",
-//         device
-//             .OpenPropertyStore(STGM_READ)?
-//             .GetValue(&PROPERTYKEY {
-//                 fmtid: Properties::DEVPKEY_Device_FriendlyName.fmtid,
-//                 pid: Properties::DEVPKEY_Device_FriendlyName.pid
-//             })?
-//     );
-
-//     let volume = device.Activate::<IAudioEndpointVolume>(CLSCTX_ALL, None)?;
-
-//     volume.VolumeStepDown(&GUID::zeroed())?;
-
-//     Ok(())
-// }
