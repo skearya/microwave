@@ -12,11 +12,12 @@ use std::time::Duration;
 use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
 
 use microphone::Microphone;
-use ovr::Ovr;
+use ovr::{ControllerEvent, Ovr};
 
 struct Microwave {
-    ovr: Ovr,
-    mic: Option<Microphone>,
+    binding: String,
+    setting_binding: bool,
+    mic: Microphone,
     mics: Vec<String>,
     mode: MicMode,
 }
@@ -54,6 +55,8 @@ fn main() -> iced::Result {
             (
                 Microwave {
                     ovr,
+                    binding: ovr::binding_to_string(1024 | 4),
+                    setting_binding: false,
                     mic: mics
                         .iter()
                         .find(|mic| mic.name.contains("Headset Microphone"))
@@ -86,20 +89,37 @@ impl Microwave {
 
     fn update(&mut self, message: Message) {
         match message {
-            Message::PollControllers => unsafe {
-                if let Ok(Some(event)) = self.ovr.poll_input() {
-                    match event {
-                        ovr::ControllerEvent::Pressed => self.update(Message::MuteToggle),
-                        ovr::ControllerEvent::Released => {}
+            Message::PollControllers => {
+                if let Ok(Some(event)) = unsafe { self.ovr.poll_input() } {
+                    match (event, self.mode) {
+                        (ControllerEvent::Pressed, MicMode::PushToTalk) => unsafe {
+                            let _ = self.mic.set_mute(true);
+                        },
+                        (ControllerEvent::Released, MicMode::PushToTalk) => unsafe {
+                            let _ = self.mic.set_mute(false);
+                        },
+                        (ControllerEvent::Pressed, MicMode::MuteAndUnmute) => {
+                            self.update(Message::MuteToggle);
+                        }
+                        (ControllerEvent::Released, MicMode::MuteAndUnmute) => {}
+                        (ControllerEvent::BindingUpdate(binding), _) => {
+                            self.binding = ovr::binding_to_string(binding)
+                        }
+                        (ControllerEvent::BindingSet(binding), _) => {
+                            self.binding = ovr::binding_to_string(binding);
+                            self.setting_binding = false;
+                        }
                     }
                 }
-            },
-            Message::MuteToggle => {
-                if let Some(mic) = &mut self.mic {
-                    let _ = unsafe { mic.set_mute(!mic.muted) };
-                }
             }
-            Message::MicMode(choice) => self.mode = choice,
+            Message::MuteToggle => {
+                let _ = unsafe { self.mic.set_mute(!self.mic.muted) };
+            }
+            Message::MicMode(choice) => {
+                if choice == MicMode::PushToTalk {}
+
+                self.mode = choice
+            }
             Message::MicSelected(choice) => {
                 let mics = unsafe { microphone::active().expect("error getting microphones") };
 
@@ -107,6 +127,7 @@ impl Microwave {
             }
             Message::SettingControllerBind => {
                 self.ovr.start_setting_binding();
+                self.setting_binding = true;
             }
         }
     }
@@ -136,39 +157,33 @@ impl Microwave {
         ]
         .spacing(8);
 
-        let mic_toggle = if let Some(mic) = &self.mic {
-            let button = button(
-                row![
-                    text(if mic.muted { "Unmute" } else { "Mute" }).width(Length::Fill),
-                    svg(if mic.muted {
-                        "res/muted.svg"
-                    } else {
-                        "res/unmuted.svg"
-                    })
-                    .width(40),
-                ]
-                .align_y(Vertical::Center),
-            )
-            .width(Length::Fill)
-            .padding(16)
-            .style(button::secondary)
-            .on_press_maybe((self.mode == MicMode::MuteAndUnmute).then_some(Message::MuteToggle));
-
-            Some(button)
-        } else {
-            None
-        };
+        let mic_toggle = button(
+            row![
+                text(if self.mic.muted { "Unmute" } else { "Mute" }).width(Length::Fill),
+                svg(if self.mic.muted {
+                    "res/muted.svg"
+                } else {
+                    "res/unmuted.svg"
+                })
+                .width(40),
+            ]
+            .align_y(Vertical::Center),
+        )
+        .width(Length::Fill)
+        .padding(16)
+        .style(button::secondary)
+        .on_press_maybe((self.mode == MicMode::MuteAndUnmute).then_some(Message::MuteToggle));
 
         let controller_binding = column![
             text("Controller Binding"),
             row![
-                container(text(self.ovr.binding_to_string()))
+                container(text(&self.binding))
                     .style(container::bordered_box)
                     .width(Length::Fill)
                     .padding(16),
                 button("Set Bind")
                     .on_press_maybe(
-                        (!self.ovr.setting_binding).then_some(Message::SettingControllerBind)
+                        (!self.setting_binding).then_some(Message::SettingControllerBind)
                     )
                     .padding(16)
             ]
@@ -180,7 +195,7 @@ impl Microwave {
             text("Microphone"),
             pick_list(
                 self.mics.as_slice(),
-                self.mic.as_ref().map(|mic| &mic.name),
+                Some(&self.mic.name),
                 Message::MicSelected,
             )
             .width(Length::Fill)
@@ -188,11 +203,7 @@ impl Microwave {
         ]
         .spacing(8);
 
-        let column = column![header, mic_mode]
-            .push_maybe(mic_toggle)
-            .push(controller_binding)
-            .push(mics)
-            .spacing(20);
+        let column = column![header, mic_mode, mic_toggle, controller_binding, mics].spacing(20);
 
         container(column)
             .width(Length::Fill)

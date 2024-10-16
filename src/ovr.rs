@@ -38,6 +38,7 @@ pub struct Ovr {
 pub enum ControllerEvent {
     Pressed,
     Released,
+    BindingUpdate(u32),
     BindingSet(u32),
 }
 
@@ -80,7 +81,13 @@ impl Ovr {
         .check()?;
 
         if self.setting_binding {
-            self.binding = self.binding | state.Buttons;
+            let binding = self.binding | state.Buttons;
+
+            if binding != self.binding {
+                return Ok(Some(ControllerEvent::BindingUpdate(self.binding)));
+            }
+
+            self.binding = binding;
 
             // At least one button binded and they are no longer holding down the button(s)
             if self.binding != 0 && self.binding & state.Buttons == 0 {
@@ -116,27 +123,27 @@ impl Ovr {
         self.setting_binding = true;
     }
 
-    pub fn binding_to_string(&self) -> String {
-        let mut output = String::new();
-
-        for (button, string) in MAPPINGS {
-            if self.binding & button != 0 {
-                if output.is_empty() {
-                    output.push_str(string);
-                } else {
-                    output.push_str(" + ");
-                    output.push_str(string);
-                }
-            }
-        }
-
-        output
-    }
-
     pub unsafe fn shutdown(session: ovrSession) {
         ovr_Destroy(session);
         ovr_Shutdown();
     }
+}
+
+pub fn binding_to_string(binding: u32) -> String {
+    let mut output = String::new();
+
+    for (button, string) in MAPPINGS {
+        if binding & button != 0 {
+            if output.is_empty() {
+                output.push_str(string);
+            } else {
+                output.push_str(" + ");
+                output.push_str(string);
+            }
+        }
+    }
+
+    output
 }
 
 const MAPPINGS: &[(u32, &str)] = &[
