@@ -96,7 +96,7 @@ impl Microwave {
                     self.headset = headset;
                     self.runner = Some(sender)
                 }
-                Event::ControllerEvent(event) => match (event, self.mode) {
+                Event::Controller(event) => match (event, self.mode) {
                     (ControllerEvent::Pressed, MicMode::PushToTalk) => {
                         if let Some(mic) = &mut self.mic {
                             unsafe {

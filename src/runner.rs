@@ -10,7 +10,7 @@ use crate::ovr::{ControllerEvent, Ovr, OvrError, OVR_SESSION};
 #[derive(Debug, Clone)]
 pub enum Event {
     Ready(String, mpsc::Sender<Message>),
-    ControllerEvent(ControllerEvent),
+    Controller(ControllerEvent),
     Error(OvrError),
 }
 
@@ -39,7 +39,7 @@ pub fn poll() -> impl Stream<Item = Event> {
                 _ = tokio::time::sleep(interval) => {
                     match unsafe { ovr.poll_input() } {
                         Ok(Some(event)) => {
-                            let _ = output.send(Event::ControllerEvent(event)).await;
+                            let _ = output.send(Event::Controller(event)).await;
                         },
                         Err(error) => {
                             let _ = output.send(Event::Error(error)).await;

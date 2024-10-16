@@ -88,7 +88,7 @@ impl Ovr {
 
         if self.setting_binding {
             let prev_binding = self.binding;
-            self.binding = self.binding | state.Buttons;
+            self.binding |= state.Buttons;
 
             // Higher button value means more buttons pressed
             if prev_binding < self.binding {
