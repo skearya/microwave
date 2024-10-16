@@ -5,10 +5,11 @@ use iced::{
     stream,
 };
 
-use crate::ovr::{ControllerEvent, Ovr, OvrError};
+use crate::ovr::{ControllerEvent, Ovr, OvrError, OVR_SESSION};
 
+#[derive(Debug, Clone)]
 pub enum Event {
-    Ready(mpsc::Sender<Message>),
+    Ready(String, mpsc::Sender<Message>),
     ControllerEvent(ControllerEvent),
     Error(OvrError),
 }
@@ -17,14 +18,16 @@ pub enum Message {
     SettingBind,
 }
 
-pub fn poll(ovr: Ovr) -> impl Stream<Item = Event> {
+pub fn poll() -> impl Stream<Item = Event> {
     stream::channel(64, move |mut output| async move {
         let (sender, mut receiver) = mpsc::channel(64);
 
-        let mut ovr = ovr;
+        let mut ovr = unsafe { Ovr::new().expect("failed connecting to headset") };
+        unsafe { OVR_SESSION = ovr.session };
+
         let interval = Duration::from_secs_f32(1000.0 / ovr.refresh_rate / 1000.0);
 
-        let _ = output.send(Event::Ready(sender)).await;
+        let _ = output.send(Event::Ready(ovr.headset.clone(), sender)).await;
 
         loop {
             tokio::select! {
@@ -36,10 +39,10 @@ pub fn poll(ovr: Ovr) -> impl Stream<Item = Event> {
                 _ = tokio::time::sleep(interval) => {
                     match unsafe { ovr.poll_input() } {
                         Ok(Some(event)) => {
-                            output.send(Event::ControllerEvent(event)).await;
+                            let _ = output.send(Event::ControllerEvent(event)).await;
                         },
                         Err(error) => {
-                            output.send(Event::Error(error)).await;
+                            let _ = output.send(Event::Error(error)).await;
                         },
                         _ => {}
                     }

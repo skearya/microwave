@@ -16,7 +16,10 @@ use bindings::{
     ovr_Initialize, ovr_Shutdown,
 };
 
-#[derive(Debug)]
+// I need to close the session when the window closes...
+pub static mut OVR_SESSION: ovrSession = std::ptr::null_mut();
+
+#[derive(Debug, Clone)]
 pub struct OvrError {
     pub code: i32,
     pub reason: String,
@@ -34,7 +37,10 @@ pub struct Ovr {
     pressed: bool,
 }
 
-#[derive(Debug)]
+unsafe impl Send for Ovr {}
+unsafe impl Sync for Ovr {}
+
+#[derive(Debug, Clone)]
 pub enum ControllerEvent {
     Pressed,
     Released,
@@ -83,9 +89,9 @@ impl Ovr {
         if self.setting_binding {
             let binding = self.binding | state.Buttons;
 
-            if binding != self.binding {
-                return Ok(Some(ControllerEvent::BindingUpdate(self.binding)));
-            }
+            // if binding != self.binding {
+            //     return Ok(Some(ControllerEvent::BindingUpdate(self.binding)));
+            // }
 
             self.binding = binding;
 

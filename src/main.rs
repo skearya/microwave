@@ -1,25 +1,29 @@
 mod microphone;
 mod ovr;
-mod subscription;
+mod runner;
 
 use iced::{
     alignment::Vertical,
     color,
+    futures::{channel::mpsc, SinkExt},
     widget::{button, column, container, pick_list, radio, row, svg, text},
     Element, Length, Subscription, Task, Theme,
 };
+use runner::Event;
 use std::time::Duration;
 use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
 
 use microphone::Microphone;
-use ovr::{ControllerEvent, Ovr};
+use ovr::{ControllerEvent, Ovr, OVR_SESSION};
 
 struct Microwave {
-    binding: String,
-    setting_binding: bool,
-    mic: Microphone,
+    runner: Option<mpsc::Sender<runner::Message>>,
+    headset: String,
+    mic: Option<Microphone>,
     mics: Vec<String>,
     mode: MicMode,
+    binding: String,
+    setting_binding: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,7 +34,7 @@ enum MicMode {
 
 #[derive(Debug, Clone)]
 enum Message {
-    PollControllers,
+    Runner(runner::Event),
     MuteToggle,
     MicMode(MicMode),
     MicSelected(String),
@@ -42,9 +46,6 @@ fn main() -> iced::Result {
         CoInitializeEx(None, COINIT_APARTMENTTHREADED).unwrap();
     }
 
-    let ovr = unsafe { Ovr::new().expect("failed connecting to headset") };
-    let session = ovr.session;
-
     let mics = unsafe { microphone::active().expect("error getting microphones") };
 
     iced::application("Test", Microwave::update, Microwave::view)
@@ -54,22 +55,26 @@ fn main() -> iced::Result {
         .run_with(move || {
             (
                 Microwave {
-                    ovr,
-                    binding: ovr::binding_to_string(1024 | 4),
-                    setting_binding: false,
+                    runner: None,
+                    headset: "Disconnected".to_string(),
                     mic: mics
                         .iter()
                         .find(|mic| mic.name.contains("Headset Microphone"))
                         .cloned(),
                     mics: mics.into_iter().map(|mic| mic.name).collect(),
                     mode: MicMode::MuteAndUnmute,
+                    binding: ovr::binding_to_string(1024 | 4),
+                    setting_binding: false,
                 },
                 Task::none(),
             )
         })?;
 
     unsafe {
-        Ovr::shutdown(session);
+        if !OVR_SESSION.is_null() {
+            Ovr::shutdown(OVR_SESSION);
+        }
+
         CoUninitialize();
     }
 
@@ -82,41 +87,61 @@ impl Microwave {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        let interval = Duration::from_secs_f32(1000.0 / self.ovr.refresh_rate / 1000.0);
-
-        iced::time::every(interval).map(|_| Message::PollControllers)
+        Subscription::run(runner::poll).map(Message::Runner)
     }
 
     fn update(&mut self, message: Message) {
         match message {
-            Message::PollControllers => {
-                if let Ok(Some(event)) = unsafe { self.ovr.poll_input() } {
-                    match (event, self.mode) {
-                        (ControllerEvent::Pressed, MicMode::PushToTalk) => unsafe {
-                            let _ = self.mic.set_mute(true);
-                        },
-                        (ControllerEvent::Released, MicMode::PushToTalk) => unsafe {
-                            let _ = self.mic.set_mute(false);
-                        },
-                        (ControllerEvent::Pressed, MicMode::MuteAndUnmute) => {
-                            self.update(Message::MuteToggle);
+            Message::Runner(event) => match event {
+                Event::Ready(headset, sender) => {
+                    self.headset = headset;
+                    self.runner = Some(sender)
+                }
+                Event::ControllerEvent(event) => match (event, self.mode) {
+                    (ControllerEvent::Pressed, MicMode::PushToTalk) => {
+                        if let Some(mic) = &mut self.mic {
+                            unsafe {
+                                let _ = mic.set_mute(true);
+                            }
                         }
-                        (ControllerEvent::Released, MicMode::MuteAndUnmute) => {}
-                        (ControllerEvent::BindingUpdate(binding), _) => {
-                            self.binding = ovr::binding_to_string(binding)
+                    }
+                    (ControllerEvent::Released, MicMode::PushToTalk) => {
+                        if let Some(mic) = &mut self.mic {
+                            unsafe {
+                                let _ = mic.set_mute(false);
+                            }
                         }
-                        (ControllerEvent::BindingSet(binding), _) => {
-                            self.binding = ovr::binding_to_string(binding);
-                            self.setting_binding = false;
-                        }
+                    }
+                    (ControllerEvent::Pressed, MicMode::MuteAndUnmute) => {
+                        self.update(Message::MuteToggle);
+                    }
+                    (ControllerEvent::Released, MicMode::MuteAndUnmute) => {}
+                    (ControllerEvent::BindingUpdate(binding), _) => {
+                        dbg!(binding);
+                        self.binding = ovr::binding_to_string(binding)
+                    }
+                    (ControllerEvent::BindingSet(binding), _) => {
+                        self.binding = ovr::binding_to_string(binding);
+                        self.setting_binding = false;
+                    }
+                },
+                Event::Error(_error) => {}
+            },
+            Message::MuteToggle => {
+                if let Some(mic) = &mut self.mic {
+                    unsafe {
+                        let _ = mic.set_mute(!mic.muted);
                     }
                 }
             }
-            Message::MuteToggle => {
-                let _ = unsafe { self.mic.set_mute(!self.mic.muted) };
-            }
             Message::MicMode(choice) => {
-                if choice == MicMode::PushToTalk {}
+                if choice == MicMode::PushToTalk {
+                    if let Some(mic) = &mut self.mic {
+                        unsafe {
+                            let _ = mic.set_mute(false);
+                        }
+                    }
+                }
 
                 self.mode = choice
             }
@@ -126,7 +151,10 @@ impl Microwave {
                 self.mic = mics.iter().find(|mic| mic.name == choice).cloned();
             }
             Message::SettingControllerBind => {
-                self.ovr.start_setting_binding();
+                if let Some(runner) = &mut self.runner {
+                    let _ = runner.try_send(runner::Message::SettingBind);
+                }
+
                 self.setting_binding = true;
             }
         }
@@ -135,7 +163,7 @@ impl Microwave {
     fn view(&self) -> Element<Message> {
         let header = row![
             text("Microwave").width(Length::Fill).size(24),
-            text!("Connected to {}", self.ovr.headset)
+            text!("Connected to {}", self.headset)
                 .size(18)
                 .color(color!(0x3FC661))
         ]
@@ -157,22 +185,28 @@ impl Microwave {
         ]
         .spacing(8);
 
-        let mic_toggle = button(
-            row![
-                text(if self.mic.muted { "Unmute" } else { "Mute" }).width(Length::Fill),
-                svg(if self.mic.muted {
-                    "res/muted.svg"
-                } else {
-                    "res/unmuted.svg"
-                })
-                .width(40),
-            ]
-            .align_y(Vertical::Center),
-        )
-        .width(Length::Fill)
-        .padding(16)
-        .style(button::secondary)
-        .on_press_maybe((self.mode == MicMode::MuteAndUnmute).then_some(Message::MuteToggle));
+        let mic_toggle = if let Some(mic) = &self.mic {
+            let button = button(
+                row![
+                    text(if mic.muted { "Unmute" } else { "Mute" }).width(Length::Fill),
+                    svg(if mic.muted {
+                        "res/muted.svg"
+                    } else {
+                        "res/unmuted.svg"
+                    })
+                    .width(40),
+                ]
+                .align_y(Vertical::Center),
+            )
+            .width(Length::Fill)
+            .padding(16)
+            .style(button::secondary)
+            .on_press_maybe((self.mode == MicMode::MuteAndUnmute).then_some(Message::MuteToggle));
+
+            Some(button)
+        } else {
+            None
+        };
 
         let controller_binding = column![
             text("Controller Binding"),
@@ -195,7 +229,7 @@ impl Microwave {
             text("Microphone"),
             pick_list(
                 self.mics.as_slice(),
-                Some(&self.mic.name),
+                self.mic.as_ref().map(|mic| &mic.name),
                 Message::MicSelected,
             )
             .width(Length::Fill)
@@ -203,7 +237,11 @@ impl Microwave {
         ]
         .spacing(8);
 
-        let column = column![header, mic_mode, mic_toggle, controller_binding, mics].spacing(20);
+        let column = column![header, mic_mode]
+            .push_maybe(mic_toggle)
+            .push(controller_binding)
+            .push(mics)
+            .spacing(20);
 
         container(column)
             .width(Length::Fill)
