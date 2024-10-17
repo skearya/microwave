@@ -7,6 +7,7 @@ use iced::{
     color,
     futures::channel::mpsc,
     widget::{button, column, container, pick_list, radio, row, svg, text},
+    window::{self, icon},
     Element, Length, Subscription, Task, Theme,
 };
 use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
@@ -60,9 +61,13 @@ fn main() -> iced::Result {
     }
 
     iced::application("Microwave", Microwave::update, Microwave::view)
-        .window_size((450.0, 600.0))
         .theme(Microwave::theme)
         .subscription(Microwave::subscription)
+        .window(window::Settings {
+            size: (450.0, 600.0).into(),
+            icon: icon::from_file_data(include_bytes!("../res/microwave.png"), None).ok(),
+            ..Default::default()
+        })
         .run_with(Microwave::new)?;
 
     // TODO: Probably replaceable with an on application close callback
@@ -100,7 +105,8 @@ impl Microwave {
     }
 
     fn update(&mut self, message: Message) {
-        // TODO: Have messages be in an enum for each screen?
+        // Since the majority of messages are to be handled when we are in State::Ready, i'm doing it like this
+
         let State::Ready(state) = &mut self.state else {
             match message {
                 Message::Poller(Event::Ready(headset, poller)) => {
@@ -115,7 +121,7 @@ impl Microwave {
                                 .clone(),
                             mics: mics.into_iter().map(|mic| mic.name).collect(),
                             mode: MicMode::MuteAndUnmute,
-                            binding: ovr::binding_to_string(1024 | 4),
+                            binding: ovr::binding_to_string(1024 | 4 /* L Thumb + R Thumb */),
                             is_setting_binding: false,
                         }),
                         Ok(_) => State::Errored {
@@ -132,7 +138,7 @@ impl Microwave {
                     };
                 }
                 Message::Retry => self.state = State::Loading,
-                _ => {}
+                _ => unreachable!(),
             }
 
             return;
@@ -140,13 +146,12 @@ impl Microwave {
 
         match message {
             Message::Poller(event) => match event {
-                Event::Ready(_headset, _poller) => { /* Already handled */ }
                 Event::Controller(event) => match (event, state.mode) {
                     (ControllerEvent::Pressed, MicMode::PushToTalk) => {
-                        let _ = unsafe { state.mic.set_mute(true) };
+                        let _ = unsafe { state.mic.set_mute(false) };
                     }
                     (ControllerEvent::Released, MicMode::PushToTalk) => {
-                        let _ = unsafe { state.mic.set_mute(false) };
+                        let _ = unsafe { state.mic.set_mute(true) };
                     }
                     (ControllerEvent::Pressed, MicMode::MuteAndUnmute) => {
                         let _ = unsafe { state.mic.set_mute(!state.mic.muted) };
@@ -165,14 +170,13 @@ impl Microwave {
                         error: format!("OVR Error\nCode {code}\nReason {reason}"),
                     };
                 }
+                Event::Ready(_, _) => unreachable!(),
             },
             Message::MuteToggle => {
                 let _ = unsafe { state.mic.set_mute(!state.mic.muted) };
             }
             Message::MicMode(choice) => {
-                if choice == MicMode::PushToTalk {
-                    let _ = unsafe { state.mic.set_mute(false) };
-                }
+                let _ = unsafe { state.mic.set_mute(false) };
 
                 state.mode = choice;
             }
@@ -193,7 +197,7 @@ impl Microwave {
 
                 state.is_setting_binding = true;
             }
-            Message::Retry => { /* Already handled */ }
+            Message::Retry => unreachable!(),
         }
     }
 

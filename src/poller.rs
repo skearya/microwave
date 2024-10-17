@@ -51,6 +51,12 @@ pub fn poll() -> impl Stream<Item = Event> {
                         },
                         Err(error) => {
                             let _ = output.send(Event::Error(error)).await;
+
+                            unsafe {
+                                Ovr::shutdown(OVR_SESSION);
+                                OVR_SESSION = std::ptr::null_mut();
+                            }
+
                             return;
                         },
                         _ => {}
