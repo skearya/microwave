@@ -40,9 +40,8 @@ pub fn poll() -> impl Stream<Item = Event> {
         loop {
             tokio::select! {
                 message = receiver.next() => {
-                    match message {
-                        Some(Message::SettingBind) => ovr.start_setting_binding(),
-                        None => {}
+                    if let Some(Message::SettingBind) = message {
+                        ovr.start_setting_binding();
                     }
                 }
                 _ = tokio::time::sleep(interval) => {
@@ -52,6 +51,7 @@ pub fn poll() -> impl Stream<Item = Event> {
                         },
                         Err(error) => {
                             let _ = output.send(Event::Error(error)).await;
+                            return;
                         },
                         _ => {}
                     }
