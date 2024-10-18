@@ -1,20 +1,21 @@
 mod microphone;
 mod ovr;
 mod poller;
+mod screen;
 
 use iced::{
-    alignment::Vertical,
-    color,
-    futures::channel::mpsc,
-    widget::{button, column, container, pick_list, radio, row, svg, text},
-    window::{self, icon},
-    Element, Length, Subscription, Task, Theme,
+    window::{icon, Settings},
+    Element, Subscription, Task, Theme,
 };
 use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
 
-use microphone::Microphone;
-use ovr::{ControllerEvent, Ovr, OvrError, OVR_SESSION};
+use ovr::{Ovr, OvrError, OVR_SESSION};
 use poller::Event;
+use screen::{
+    error::{self, Error},
+    loading,
+    ready::{self, Ready},
+};
 
 #[derive(Debug)]
 struct Microwave {
@@ -25,34 +26,15 @@ struct Microwave {
 enum State {
     Loading,
     Ready(Ready),
-    Errored { error: String },
-}
-
-#[derive(Debug)]
-struct Ready {
-    poller: mpsc::Sender<poller::Message>,
-    headset: String,
-    mic: Microphone,
-    mics: Vec<String>,
-    mode: MicMode,
-    binding: String,
-    is_setting_binding: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MicMode {
-    MuteAndUnmute,
-    PushToTalk,
+    Error(Error),
 }
 
 #[derive(Debug, Clone)]
 enum Message {
-    Poller(poller::Event),
-    MuteToggle,
-    MicMode(MicMode),
-    MicSelected(String),
-    SettingControllerBind,
-    Retry,
+    Errored(String),
+    Loading(loading::Message),
+    Ready(ready::Message),
+    Error(error::Message),
 }
 
 fn main() -> iced::Result {
@@ -63,7 +45,7 @@ fn main() -> iced::Result {
     iced::application("Microwave", Microwave::update, Microwave::view)
         .theme(Microwave::theme)
         .subscription(Microwave::subscription)
-        .window(window::Settings {
+        .window(Settings {
             size: (450.0, 600.0).into(),
             icon: icon::from_file_data(include_bytes!("../res/microwave.png"), None).ok(),
             ..Default::default()
@@ -97,212 +79,55 @@ impl Microwave {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        if let State::Errored { error: _ } = &self.state {
+        if let State::Error(_) = &self.state {
             Subscription::none()
         } else {
-            Subscription::run(poller::poll).map(Message::Poller)
+            Subscription::run(poller::poll).map(|event| match event {
+                Event::Ready(headset, sender) => {
+                    Message::Loading(loading::Message::Ready((headset, sender)))
+                }
+                Event::Controller(event) => Message::Ready(ready::Message::Controller(event)),
+                Event::Error(OvrError { code, reason }) => {
+                    Message::Errored(format!("OVR Error\nCode {code}\nReason {reason}"))
+                }
+            })
         }
     }
 
     fn update(&mut self, message: Message) {
-        // Since the majority of messages are to be handled when we are in State::Ready, i'm doing it like this
+        let update = match message {
+            Message::Errored(message) => Some(State::Error(Error { error: message })),
+            Message::Loading(message) => {
+                let State::Loading = self.state else { return };
 
-        let State::Ready(state) = &mut self.state else {
-            match message {
-                Message::Poller(Event::Ready(headset, poller)) => {
-                    self.state = match unsafe { microphone::active() } {
-                        Ok(mics) if !mics.is_empty() => State::Ready(Ready {
-                            poller,
-                            headset,
-                            mic: mics
-                                .iter()
-                                .find(|mic| mic.name.contains("Headset Microphone"))
-                                .unwrap_or_else(|| &mics[0])
-                                .clone(),
-                            mics: mics.into_iter().map(|mic| mic.name).collect(),
-                            mode: MicMode::MuteAndUnmute,
-                            binding: ovr::binding_to_string(1024 | 4 /* L Thumb + R Thumb */),
-                            is_setting_binding: false,
-                        }),
-                        Ok(_) => State::Errored {
-                            error: "No microphones found".to_string(),
-                        },
-                        Err(error) => State::Errored {
-                            error: error.to_string(),
-                        },
-                    };
-                }
-                Message::Poller(Event::Error(OvrError { code, reason })) => {
-                    self.state = State::Errored {
-                        error: format!("OVR Error\nCode {code}\nReason {reason}"),
-                    };
-                }
-                Message::Retry => self.state = State::Loading,
-                _ => unreachable!(),
+                loading::update(message)
             }
+            Message::Ready(message) => {
+                let State::Ready(ready) = &mut self.state else {
+                    return;
+                };
 
-            return;
+                ready.update(message)
+            }
+            Message::Error(message) => {
+                let State::Error(error) = &mut self.state else {
+                    return;
+                };
+
+                error.update(message)
+            }
         };
 
-        match message {
-            Message::Poller(event) => match event {
-                Event::Controller(event) => match (event, state.mode) {
-                    (ControllerEvent::Pressed, MicMode::PushToTalk) => {
-                        let _ = unsafe { state.mic.set_mute(false) };
-                    }
-                    (ControllerEvent::Released, MicMode::PushToTalk) => {
-                        let _ = unsafe { state.mic.set_mute(true) };
-                    }
-                    (ControllerEvent::Pressed, MicMode::MuteAndUnmute) => {
-                        let _ = unsafe { state.mic.set_mute(!state.mic.muted) };
-                    }
-                    (ControllerEvent::Released, MicMode::MuteAndUnmute) => {}
-                    (ControllerEvent::BindingUpdate(binding), _) => {
-                        state.binding = ovr::binding_to_string(binding)
-                    }
-                    (ControllerEvent::BindingSet(binding), _) => {
-                        state.binding = ovr::binding_to_string(binding);
-                        state.is_setting_binding = false;
-                    }
-                },
-                Event::Error(OvrError { code, reason }) => {
-                    self.state = State::Errored {
-                        error: format!("OVR Error\nCode {code}\nReason {reason}"),
-                    };
-                }
-                Event::Ready(_, _) => unreachable!(),
-            },
-            Message::MuteToggle => {
-                let _ = unsafe { state.mic.set_mute(!state.mic.muted) };
-            }
-            Message::MicMode(choice) => {
-                let _ = unsafe { state.mic.set_mute(false) };
-
-                state.mode = choice;
-            }
-            Message::MicSelected(choice) => {
-                let mics = unsafe { microphone::active().expect("error getting microphones") };
-
-                match mics.iter().find(|mic| mic.name == choice).cloned() {
-                    Some(mic) => state.mic = mic,
-                    None => {
-                        self.state = State::Errored {
-                            error: "Mic now unable to be used".to_string(),
-                        };
-                    }
-                }
-            }
-            Message::SettingControllerBind => {
-                let _ = state.poller.try_send(poller::Message::SettingBind);
-
-                state.is_setting_binding = true;
-            }
-            Message::Retry => unreachable!(),
-        }
+        if let Some(state) = update {
+            self.state = state
+        };
     }
 
     fn view(&self) -> Element<Message> {
         match &self.state {
-            State::Loading => Microwave::loading(),
-            State::Ready(ready) => Microwave::ready(ready),
-            State::Errored { error } => Microwave::errored(error),
+            State::Loading => loading::view().map(Message::Loading),
+            State::Ready(ready) => ready.view().map(Message::Ready),
+            State::Error(error) => error.view().map(Message::Error),
         }
-    }
-
-    fn loading() -> Element<'static, Message> {
-        container(text("Loading...")).center(Length::Fill).into()
-    }
-
-    fn ready(state: &Ready) -> Element<Message> {
-        let header = row![
-            text("Microwave").width(Length::Fill).size(24),
-            text!("Connected to {}", state.headset)
-                .size(18)
-                .color(color!(0x3FC661))
-        ]
-        .align_y(Vertical::Center);
-
-        let mic_mode = column![
-            radio(
-                "Mute / Unmute",
-                MicMode::MuteAndUnmute,
-                Some(state.mode),
-                Message::MicMode,
-            ),
-            radio(
-                "Push To Talk",
-                MicMode::PushToTalk,
-                Some(state.mode),
-                Message::MicMode,
-            )
-        ]
-        .spacing(8);
-
-        let mic_toggle = button(
-            row![
-                text(if state.mic.muted { "Unmute" } else { "Mute" }).width(Length::Fill),
-                svg(if state.mic.muted {
-                    "res/muted.svg"
-                } else {
-                    "res/unmuted.svg"
-                })
-                .width(40),
-            ]
-            .align_y(Vertical::Center),
-        )
-        .width(Length::Fill)
-        .padding(16)
-        .style(button::secondary)
-        .on_press_maybe((state.mode == MicMode::MuteAndUnmute).then_some(Message::MuteToggle));
-
-        let controller_binding = column![
-            text("Controller Binding"),
-            row![
-                container(text(&state.binding))
-                    .style(container::bordered_box)
-                    .width(Length::Fill)
-                    .padding(16),
-                button("Set Bind")
-                    .on_press_maybe(
-                        (!state.is_setting_binding).then_some(Message::SettingControllerBind)
-                    )
-                    .padding(16)
-            ]
-            .spacing(8)
-        ]
-        .spacing(8);
-
-        let mics = column![
-            text("Microphone"),
-            pick_list(
-                state.mics.as_slice(),
-                Some(&state.mic.name),
-                Message::MicSelected,
-            )
-            .width(Length::Fill)
-            .padding(16)
-        ]
-        .spacing(8);
-
-        let column = column![header, mic_mode, mic_toggle, controller_binding, mics].spacing(20);
-
-        container(column)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .padding([36, 16])
-            .into()
-    }
-
-    fn errored(error: &str) -> Element<'_, Message> {
-        container(
-            column![
-                text(error).style(text::danger),
-                button("Retry").on_press(Message::Retry)
-            ]
-            .spacing(8),
-        )
-        .center(Length::Fill)
-        .padding(20)
-        .into()
     }
 }
