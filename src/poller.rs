@@ -23,10 +23,10 @@ pub fn poll() -> impl Stream<Item = Event> {
         let (sender, mut receiver) = mpsc::channel(64);
 
         let mut ovr = match unsafe { Ovr::new() } {
-            Ok(ovr) => unsafe {
-                OVR_SESSION = ovr.session;
+            Ok(ovr) => {
+                unsafe { OVR_SESSION = ovr.session };
                 ovr
-            },
+            }
             Err(error) => {
                 let _ = output.send(Event::Error(error)).await;
                 return;
