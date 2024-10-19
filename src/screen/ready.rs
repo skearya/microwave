@@ -1,3 +1,5 @@
+use std::io::Cursor;
+
 use iced::{
     alignment::Vertical,
     color,
@@ -5,6 +7,7 @@ use iced::{
     widget::{button, column, container, pick_list, radio, row, svg, text},
     Element, Length,
 };
+use rodio::{Decoder, OutputStream, OutputStreamHandle, Source};
 
 use super::error::Error;
 use crate::{
@@ -13,7 +16,9 @@ use crate::{
     poller, State,
 };
 
-#[derive(Debug)]
+const MUTED_AUDIO: Cursor<&[u8]> = Cursor::new(include_bytes!("../../res/mute.wav"));
+const UNMUTED_AUDIO: Cursor<&[u8]> = Cursor::new(include_bytes!("../../res/unmute.wav"));
+
 pub struct Ready {
     pub poller: mpsc::Sender<poller::Message>,
     pub headset: String,
@@ -22,6 +27,7 @@ pub struct Ready {
     pub mode: MicMode,
     pub binding: String,
     pub is_setting_binding: bool,
+    pub audio: Option<(OutputStream, OutputStreamHandle)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,20 +50,20 @@ impl Ready {
         match message {
             Message::Controller(event) => match (event, self.mode) {
                 (ControllerEvent::Pressed, MicMode::PushToTalk) => {
-                    let _ = unsafe { self.mic.set_mute(false) };
+                    self.set_mute(false);
                 }
                 (ControllerEvent::Released, MicMode::PushToTalk) => {
-                    let _ = unsafe { self.mic.set_mute(true) };
+                    self.set_mute(true);
                 }
                 (ControllerEvent::Pressed, MicMode::MuteAndUnmute) => {
-                    let _ = unsafe { self.mic.set_mute(!self.mic.muted) };
+                    self.set_mute(!self.mic.muted);
                 }
                 (ControllerEvent::Released, MicMode::MuteAndUnmute) => {}
                 (ControllerEvent::BindingUpdate(binding), _) => {
-                    self.binding = ovr::binding_to_string(binding)
+                    self.binding = binding;
                 }
                 (ControllerEvent::BindingSet(binding), _) => {
-                    self.binding = ovr::binding_to_string(binding);
+                    self.binding = binding;
                     self.is_setting_binding = false;
                 }
             },
@@ -75,7 +81,14 @@ impl Ready {
                 self.mode = mode;
             }
             Message::MicSelected(choice) => {
-                let mics = unsafe { microphone::active().expect("error getting microphones") };
+                let mics = match unsafe { microphone::active() } {
+                    Ok(mics) => mics,
+                    Err(error) => {
+                        return Some(State::Error(Error {
+                            error: error.to_string(),
+                        }))
+                    }
+                };
 
                 match mics.iter().find(|mic| mic.name == choice).cloned() {
                     Some(mic) => self.mic = mic,
@@ -174,5 +187,20 @@ impl Ready {
             .height(Length::Fill)
             .padding([36, 16])
             .into()
+    }
+
+    fn set_mute(&mut self, mute: bool) {
+        if unsafe { self.mic.set_mute(mute).is_ok() } {
+            if let Some((_, stream_handle)) = &self.audio {
+                let cursor = if mute { MUTED_AUDIO } else { UNMUTED_AUDIO };
+
+                let Ok(source) = Decoder::new(cursor) else {
+                    return;
+                };
+
+                // TODO: Try choosing a new default output if this errors
+                let _ = stream_handle.play_raw(source.convert_samples());
+            }
+        }
     }
 }

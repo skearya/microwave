@@ -44,7 +44,7 @@ pub fn poll() -> impl Stream<Item = Event> {
                         ovr.start_setting_binding();
                     }
                 }
-                _ = tokio::time::sleep(interval) => {
+                () = tokio::time::sleep(interval) => {
                     match unsafe { ovr.poll_input() } {
                         Ok(Some(event)) => {
                             let _ = output.send(Event::Controller(event)).await;

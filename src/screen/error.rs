@@ -5,20 +5,19 @@ use iced::{
 
 use crate::State;
 
-#[derive(Debug)]
 pub struct Error {
     pub error: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum Message {
     Retry,
 }
 
 impl Error {
-    pub fn update(&mut self, message: Message) -> Option<State> {
+    pub fn update(&self, message: Message) -> State {
         match message {
-            Message::Retry => Some(State::Loading),
+            Message::Retry => State::Loading,
         }
     }
 

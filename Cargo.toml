@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 iced = { version = "0.13.1", features = ["tokio", "svg", "image"] }
+rodio = "0.19.0"
 tokio = { version = "1.40.0", features = ["time", "macros"] }
 windows = { version = "0.58.0", features = [
     "Win32_Foundation",

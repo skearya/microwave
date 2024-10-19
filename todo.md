@@ -1,3 +1,4 @@
-- better error handling
-- refresh active mics
-- speaker volume stepping binds
+-   isolate unsafe
+-   refresh active mics
+-   speaker volume stepping binds ?
+-   haptics on press (looked into, seems not possible with libovr)

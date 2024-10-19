@@ -17,12 +17,10 @@ use screen::{
     ready::{self, Ready},
 };
 
-#[derive(Debug)]
 struct Microwave {
     state: State,
 }
 
-#[derive(Debug)]
 enum State {
     Loading,
     Ready(Ready),
@@ -100,7 +98,7 @@ impl Microwave {
             Message::Loading(message) => {
                 let State::Loading = self.state else { return };
 
-                loading::update(message)
+                Some(loading::update(message))
             }
             Message::Ready(message) => {
                 let State::Ready(ready) = &mut self.state else {
@@ -114,12 +112,12 @@ impl Microwave {
                     return;
                 };
 
-                error.update(message)
+                Some(error.update(message))
             }
         };
 
         if let Some(state) = update {
-            self.state = state
+            self.state = state;
         };
     }
 
