@@ -16,6 +16,9 @@ use crate::{
     poller, State,
 };
 
+const MUTED_SVG: &[u8] = include_bytes!("../../res/muted.svg");
+const UNMUTED_SVG: &[u8] = include_bytes!("../../res/unmuted.svg");
+
 const MUTED_AUDIO: Cursor<&[u8]> = Cursor::new(include_bytes!("../../res/mute.wav"));
 const UNMUTED_AUDIO: Cursor<&[u8]> = Cursor::new(include_bytes!("../../res/unmute.wav"));
 
@@ -137,11 +140,11 @@ impl Ready {
         let mic_toggle = button(
             row![
                 text(if self.mic.muted { "Unmute" } else { "Mute" }).width(Length::Fill),
-                svg(if self.mic.muted {
-                    "res/muted.svg"
+                svg(svg::Handle::from_memory(if self.mic.muted {
+                    MUTED_SVG
                 } else {
-                    "res/unmuted.svg"
-                })
+                    UNMUTED_SVG
+                }))
                 .width(40),
             ]
             .align_y(Vertical::Center),
