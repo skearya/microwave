@@ -2,8 +2,8 @@ name: "Build"
 
 on:
   push:
-    branches:
-      - main
+    tags:
+      - '*'
 
 jobs:
   build:
@@ -14,8 +14,7 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - name: Build application
         run: cargo build --profile release-opt
-      - name: Upload binary
-        uses: actions/upload-artifact@v4
+      - name: Upload
+        uses: softprops/action-gh-release@v2
         with:
-          name: microwave-x86_64
-          path: target/release-opt/microwave.exe
+          files: target/release-opt/microwave.exe
