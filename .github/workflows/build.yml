@@ -1,0 +1,21 @@
+name: "Build"
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    name: cargo build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Build application
+        run: cargo build --profile release-opt
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: microwave-x86_64
+          path: target/release-opt/microwave.exe
